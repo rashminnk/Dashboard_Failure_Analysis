@@ -1,12 +1,8 @@
-import io
-import logging
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
 from typing import Optional, Dict
-
-logging.basicConfig(level=logging.INFO)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page Configuration
@@ -18,53 +14,12 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SharePoint config — read from .streamlit/secrets.toml
-# Falls back to local Excel if secrets are not configured.
+# Local Excel file path
 # ─────────────────────────────────────────────────────────────────────────────
-_SP_KEYS = ("M365_USERNAME", "M365_PASSWORD", "SHAREPOINT_SITE_URL", "SHAREPOINT_FILE_URL")
-_PLACEHOLDERS = ("your.", "paste-", "your-")
-
-def _sp_configured() -> bool:
-    if not all(k in st.secrets for k in _SP_KEYS):
-        return False
-    return not any(
-        str(st.secrets.get(k, "")).startswith(p)
-        for k in _SP_KEYS for p in _PLACEHOLDERS
-    )
-
-_USE_SHAREPOINT = _sp_configured()
-
-# Local fallback path
 EXCEL_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "Jobs_Status_Report_2026.xlsx",
 )
-
-
-@st.cache_data(show_spinner="Fetching report from SharePoint…", ttl=3600)
-def _fetch_from_sharepoint() -> bytes:
-    """Download Excel bytes from SharePoint; cached for 1 hour."""
-    from sharepoint_fetcher import fetch_excel
-    buf: io.BytesIO = fetch_excel(
-        site_url=st.secrets["SHAREPOINT_SITE_URL"],
-        file_url=st.secrets["SHAREPOINT_FILE_URL"],
-        username=st.secrets["M365_USERNAME"],
-        password=st.secrets["M365_PASSWORD"],
-    )
-    return buf.read()
-
-
-def _get_excel() -> io.BytesIO:
-    if _USE_SHAREPOINT:
-        try:
-            return io.BytesIO(_fetch_from_sharepoint())
-        except Exception as exc:
-            st.warning(f"SharePoint fetch failed — using local file.\n{exc}")
-    if not os.path.exists(EXCEL_PATH):
-        st.error(f"Excel file not found: `{EXCEL_PATH}`")
-        st.info("Add SharePoint credentials to `.streamlit/secrets.toml`, or place `Jobs_Status_Report_2026.xlsx` here.")
-        st.stop()
-    return io.BytesIO(open(EXCEL_PATH, "rb").read())
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Global Styling
@@ -142,26 +97,38 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Data Loading
+# Guard: Excel file must exist
+# ─────────────────────────────────────────────────────────────────────────────
+if not os.path.exists(EXCEL_PATH):
+    st.error(f"Excel file not found: `{EXCEL_PATH}`")
+    st.info("Place `Jobs_Status_Report_2026.xlsx` in the same folder as `script.py` and restart.")
+    st.stop()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Data Loading (cached; cache busted when file mtime changes)
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Loading data…")
-def load_all_sheets(cache_key: str) -> Dict[str, pd.DataFrame]:
-    xl = pd.ExcelFile(_get_excel())
+def load_all_sheets(mtime: float) -> Dict[str, pd.DataFrame]:
+    """Read COM and SPC sheets. Treat 'Initial Takts' as strings."""
+    xl = pd.ExcelFile(EXCEL_PATH)
     sheets: Dict[str, pd.DataFrame] = {}
     for sheet in ("COM", "SPC"):
         if sheet not in xl.sheet_names:
             continue
         df = xl.parse(sheet, dtype={"Initial Takts": str})
+        # Normalise 'Initial Takts' — strip whitespace, fill blanks
         df["Initial Takts"] = df["Initial Takts"].fillna("Unknown").str.strip()
+        # Drop rows that are entirely blank
         df.dropna(how="all", inplace=True)
+        # Normalise Status so matching is case/space insensitive
         if "Status" in df.columns:
             df["Status"] = df["Status"].fillna("Unknown").str.strip()
         sheets[sheet] = df
     return sheets
 
 
-_cache_key = "sharepoint" if _USE_SHAREPOINT else str(os.path.getmtime(EXCEL_PATH))
-all_sheets = load_all_sheets(_cache_key)
+all_sheets = load_all_sheets(os.path.getmtime(EXCEL_PATH))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
