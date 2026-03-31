@@ -29,6 +29,7 @@ def fetch_excel(site_url: str, file_url: str, username: str, password: str) -> i
     -------
     io.BytesIO  Ready to pass directly to pandas.read_excel()
     """
+    
     try:
         from office365.runtime.auth.user_credential import UserCredential
         from office365.sharepoint.client_context import ClientContext
