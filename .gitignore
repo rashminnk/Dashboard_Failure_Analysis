@@ -1,0 +1,25 @@
+# Secrets — never commit credentials
+.streamlit/secrets.toml
+
+# Auth token cache
+.token_cache.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

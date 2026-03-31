@@ -2,3 +2,4 @@ streamlit>=1.50.0
 pandas
 plotly
 openpyxl
+Office365-REST-Python-Client

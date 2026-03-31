@@ -1,8 +1,12 @@
+import io
+import logging
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 import os
 from typing import Optional, Dict
+
+logging.basicConfig(level=logging.INFO)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Page Configuration
@@ -14,12 +18,64 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Local Excel file path
+# SharePoint config — read from st.secrets (secrets.toml or Render env vars)
+# Falls back to local Excel if SharePoint secrets are not configured.
 # ─────────────────────────────────────────────────────────────────────────────
+_SP_KEYS = ("M365_USERNAME", "M365_PASSWORD", "SHAREPOINT_SITE_URL", "SHAREPOINT_FILE_URL")
+_PLACEHOLDERS = ("your.email@sap.com", "your-m365-password", "paste-your")
+
+def _sp_configured() -> bool:
+    """True only if all SharePoint keys are present and not placeholder values."""
+    if not all(k in st.secrets for k in _SP_KEYS):
+        return False
+    return not any(
+        str(st.secrets.get(k, "")).startswith(p)
+        for k in _SP_KEYS for p in _PLACEHOLDERS
+    )
+
+_USE_SHAREPOINT = _sp_configured()
+
+# Local fallback path (used when SharePoint secrets are absent)
 EXCEL_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "Jobs_Status_Report_2026.xlsx",
 )
+
+
+@st.cache_data(show_spinner="Fetching report from SharePoint…", ttl=3600)
+def _fetch_from_sharepoint() -> bytes:
+    """Download Excel bytes from SharePoint; cached for 1 hour."""
+    from sharepoint_fetcher import fetch_excel
+    buf: io.BytesIO = fetch_excel(
+        site_url=st.secrets["SHAREPOINT_SITE_URL"],
+        file_url=st.secrets["SHAREPOINT_FILE_URL"],
+        username=st.secrets["M365_USERNAME"],
+        password=st.secrets["M365_PASSWORD"],
+    )
+    return buf.read()
+
+
+def _get_excel_source() -> io.BytesIO:
+    """
+    Return a BytesIO of the Excel file.
+    Tries SharePoint first; falls back to the local file.
+    """
+    if _USE_SHAREPOINT:
+        try:
+            raw = _fetch_from_sharepoint()
+            return io.BytesIO(raw)
+        except Exception as exc:
+            st.warning(f"SharePoint fetch failed — falling back to local file.\n{exc}")
+
+    if not os.path.exists(EXCEL_PATH):
+        st.error(f"Excel file not found: `{EXCEL_PATH}`")
+        st.info(
+            "Either configure SharePoint credentials in `.streamlit/secrets.toml`, "
+            "or place `Jobs_Status_Report_2026.xlsx` in the same folder as `script.py`."
+        )
+        st.stop()
+
+    return io.BytesIO(open(EXCEL_PATH, "rb").read())
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Global Styling
@@ -97,21 +153,13 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Guard: Excel file must exist
-# ─────────────────────────────────────────────────────────────────────────────
-if not os.path.exists(EXCEL_PATH):
-    st.error(f"Excel file not found: `{EXCEL_PATH}`")
-    st.info("Place `Jobs_Status_Report_2026.xlsx` in the same folder as `script.py` and restart.")
-    st.stop()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Data Loading (cached; cache busted when file mtime changes)
+# Data Loading
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Loading data…")
-def load_all_sheets(mtime: float) -> Dict[str, pd.DataFrame]:
-    """Read COM and SPC sheets. Treat 'Initial Takts' as strings."""
-    xl = pd.ExcelFile(EXCEL_PATH)
+def load_all_sheets(content_hash: str) -> Dict[str, pd.DataFrame]:
+    """Read COM and SPC sheets. Cache key is a hash of the file content."""
+    excel_buf = _get_excel_source()
+    xl = pd.ExcelFile(excel_buf)
     sheets: Dict[str, pd.DataFrame] = {}
     for sheet in ("COM", "SPC"):
         if sheet not in xl.sheet_names:
@@ -128,7 +176,16 @@ def load_all_sheets(mtime: float) -> Dict[str, pd.DataFrame]:
     return sheets
 
 
-all_sheets = load_all_sheets(os.path.getmtime(EXCEL_PATH))
+def _content_hash() -> str:
+    """Return a cache key for load_all_sheets."""
+    if _USE_SHAREPOINT:
+        # The SharePoint cache (TTL=1h) controls freshness; use a fixed key so
+        # load_all_sheets doesn't re-run on every page interaction.
+        return "sharepoint"
+    return str(os.path.getmtime(EXCEL_PATH))
+
+
+all_sheets = load_all_sheets(_content_hash())
 
 
 # ─────────────────────────────────────────────────────────────────────────────
