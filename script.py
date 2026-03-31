@@ -18,14 +18,13 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SharePoint config — read from st.secrets (secrets.toml or Render env vars)
-# Falls back to local Excel if SharePoint secrets are not configured.
+# SharePoint config — read from .streamlit/secrets.toml
+# Falls back to local Excel if secrets are not configured.
 # ─────────────────────────────────────────────────────────────────────────────
 _SP_KEYS = ("M365_USERNAME", "M365_PASSWORD", "SHAREPOINT_SITE_URL", "SHAREPOINT_FILE_URL")
-_PLACEHOLDERS = ("your.email@sap.com", "your-m365-password", "paste-your")
+_PLACEHOLDERS = ("your.", "paste-", "your-")
 
 def _sp_configured() -> bool:
-    """True only if all SharePoint keys are present and not placeholder values."""
     if not all(k in st.secrets for k in _SP_KEYS):
         return False
     return not any(
@@ -35,7 +34,7 @@ def _sp_configured() -> bool:
 
 _USE_SHAREPOINT = _sp_configured()
 
-# Local fallback path (used when SharePoint secrets are absent)
+# Local fallback path
 EXCEL_PATH = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "Jobs_Status_Report_2026.xlsx",
@@ -55,26 +54,16 @@ def _fetch_from_sharepoint() -> bytes:
     return buf.read()
 
 
-def _get_excel_source() -> io.BytesIO:
-    """
-    Return a BytesIO of the Excel file.
-    Tries SharePoint first; falls back to the local file.
-    """
+def _get_excel() -> io.BytesIO:
     if _USE_SHAREPOINT:
         try:
-            raw = _fetch_from_sharepoint()
-            return io.BytesIO(raw)
+            return io.BytesIO(_fetch_from_sharepoint())
         except Exception as exc:
-            st.warning(f"SharePoint fetch failed — falling back to local file.\n{exc}")
-
+            st.warning(f"SharePoint fetch failed — using local file.\n{exc}")
     if not os.path.exists(EXCEL_PATH):
         st.error(f"Excel file not found: `{EXCEL_PATH}`")
-        st.info(
-            "Either configure SharePoint credentials in `.streamlit/secrets.toml`, "
-            "or place `Jobs_Status_Report_2026.xlsx` in the same folder as `script.py`."
-        )
+        st.info("Add SharePoint credentials to `.streamlit/secrets.toml`, or place `Jobs_Status_Report_2026.xlsx` here.")
         st.stop()
-
     return io.BytesIO(open(EXCEL_PATH, "rb").read())
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -156,36 +145,23 @@ st.markdown("""
 # Data Loading
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner="Loading data…")
-def load_all_sheets(content_hash: str) -> Dict[str, pd.DataFrame]:
-    """Read COM and SPC sheets. Cache key is a hash of the file content."""
-    excel_buf = _get_excel_source()
-    xl = pd.ExcelFile(excel_buf)
+def load_all_sheets(cache_key: str) -> Dict[str, pd.DataFrame]:
+    xl = pd.ExcelFile(_get_excel())
     sheets: Dict[str, pd.DataFrame] = {}
     for sheet in ("COM", "SPC"):
         if sheet not in xl.sheet_names:
             continue
         df = xl.parse(sheet, dtype={"Initial Takts": str})
-        # Normalise 'Initial Takts' — strip whitespace, fill blanks
         df["Initial Takts"] = df["Initial Takts"].fillna("Unknown").str.strip()
-        # Drop rows that are entirely blank
         df.dropna(how="all", inplace=True)
-        # Normalise Status so matching is case/space insensitive
         if "Status" in df.columns:
             df["Status"] = df["Status"].fillna("Unknown").str.strip()
         sheets[sheet] = df
     return sheets
 
 
-def _content_hash() -> str:
-    """Return a cache key for load_all_sheets."""
-    if _USE_SHAREPOINT:
-        # The SharePoint cache (TTL=1h) controls freshness; use a fixed key so
-        # load_all_sheets doesn't re-run on every page interaction.
-        return "sharepoint"
-    return str(os.path.getmtime(EXCEL_PATH))
-
-
-all_sheets = load_all_sheets(_content_hash())
+_cache_key = "sharepoint" if _USE_SHAREPOINT else str(os.path.getmtime(EXCEL_PATH))
+all_sheets = load_all_sheets(_cache_key)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

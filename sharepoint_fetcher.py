@@ -1,21 +1,18 @@
 """
 sharepoint_fetcher.py
 ─────────────────────
-Downloads the Jobs Status Excel from SharePoint using a Microsoft 365
-email + password.  No Azure App Registration required.
+Fetches the Excel file from SharePoint using your Microsoft 365
+email + password.  Works on the corporate network (no App Registration needed).
 
-Credentials are read from Streamlit secrets (st.secrets) so the app
-works both locally (.streamlit/secrets.toml) and on Render/Streamlit Cloud.
+Library: Office365-REST-Python-Client
+    pip install Office365-REST-Python-Client
 
-Required secrets keys:
+Required secrets (in .streamlit/secrets.toml):
     M365_USERNAME         — your SAP / M365 email
     M365_PASSWORD         — your M365 password
     SHAREPOINT_SITE_URL   — e.g. https://sap.sharepoint.com/teams/YourTeam
     SHAREPOINT_FILE_URL   — server-relative path, e.g.
                             /teams/YourTeam/Shared Documents/General/Report.xlsx
-
-Install dependency:
-    pip install Office365-REST-Python-Client
 """
 
 import io
@@ -26,14 +23,7 @@ log = logging.getLogger(__name__)
 
 def fetch_excel(site_url: str, file_url: str, username: str, password: str) -> io.BytesIO:
     """
-    Authenticate to SharePoint and download the Excel file.
-
-    Parameters
-    ----------
-    site_url : str   SharePoint site root, e.g. https://sap.sharepoint.com/teams/MyTeam
-    file_url : str   Server-relative path to the xlsx file
-    username : str   M365 email address
-    password : str   M365 password
+    Authenticate to SharePoint with email + password and download the Excel file.
 
     Returns
     -------
@@ -44,7 +34,7 @@ def fetch_excel(site_url: str, file_url: str, username: str, password: str) -> i
         from office365.sharepoint.client_context import ClientContext
     except ImportError:
         raise ImportError(
-            "Missing library. Add it to requirements.txt:\n"
+            "Missing library. Add to requirements.txt:\n"
             "    Office365-REST-Python-Client"
         )
 
